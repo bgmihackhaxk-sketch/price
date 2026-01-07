@@ -1,6 +1,6 @@
 const express = require("express");
-const puppeteer = require("puppeteer");
-const { execSync } = require("child_process");
+const chromium = require("@sparticuz/chromium");
+const puppeteer = require("puppeteer-core");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -9,29 +9,20 @@ let cache = null;
 let loading = true;
 let lastError = null;
 
-function getChromiumPath() {
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    return process.env.PUPPETEER_EXECUTABLE_PATH;
-  }
-  try {
-    return execSync("which chromium").toString().trim();
-  } catch {
-    return puppeteer.executablePath();
-  }
-}
-
 async function fetchData() {
   loading = true;
   lastError = null;
-  let browser = null;
-  
+
   console.log("Fetching live data...");
+
+  let browser = null;
 
   try {
     browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: getChromiumPath(),
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: true,
     });
 
     const page = await browser.newPage();
@@ -47,7 +38,7 @@ async function fetchData() {
       timeout: 60000
     });
 
-    await new Promise(resolve => setTimeout(resolve, 6000));
+    await new Promise(r => setTimeout(r, 6000));
 
     const data = await page.evaluate(() => {
 
@@ -58,7 +49,6 @@ async function fetchData() {
         if (!headers.length) return null;
 
         const box = headers[0].closest("div");
-
         if (!box) return null;
 
         const spans = box.querySelectorAll("span");
@@ -96,25 +86,21 @@ async function fetchData() {
 
     cache = data;
     console.log("Data updated");
-  } catch (error) {
-    console.error("Error fetching data:", error.message);
-    lastError = error.message;
-  } finally {
-    loading = false;
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (e) {
-        console.error("Error closing browser:", e.message);
-      }
-    }
+
+  } catch (e) {
+    console.error("❌ Error:", e.message);
+    lastError = e.message;
   }
+
+  loading = false;
+
+  if (browser) await browser.close();
 }
 
 async function startScheduler() {
   while (true) {
     await fetchData();
-    await new Promise(resolve => setTimeout(resolve, 10000));
+    await new Promise(r => setTimeout(r, 10000));
   }
 }
 
@@ -125,19 +111,16 @@ app.get("/", (req, res) => {
 });
 
 app.get("/data", (req, res) => {
-  if (loading) {
-    return res.json({ status: "loading" });
-  }
-  if (!cache && lastError) {
+  if (loading) return res.json({ status: "loading" });
+
+  if (!cache && lastError)
     return res.json({ status: "error", error: lastError });
-  }
-  if (!cache) {
-    return res.json({ status: "loading" });
-  }
+
+  if (!cache) return res.json({ status: "loading" });
+
   res.json({ status: "ok", data: cache });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Server running on", PORT);
 });
-      
